@@ -1,6 +1,22 @@
-import warnings
-import numpy as np
+import sys
+sys.path.append('/Users/tanaya/USC/sedproxy')
+
 import pandas as pd
+import numpy as np
+import os
+
+# Get the directory where this file (make_pfm_df.py) is located
+module_dir = os.path.dirname(__file__)
+stages_key_path = os.path.join(module_dir, "data", "stages_key.csv")
+stages_key_df = pd.read_csv(stages_key_path)
+
+import warnings
+from bioturbation_weights import bioturbation_weights
+from proxy_conversion import proxy_conversion
+
+# ------------------------------------------------
+# 1. Helper functions (unchanged from your version)
+# ------------------------------------------------
 
 def is_rapid_case(bio_depth, sed_acc_rate, layer_width, n_samples, habitat_weights):
     return (
@@ -11,15 +27,14 @@ def is_rapid_case(bio_depth, sed_acc_rate, layer_width, n_samples, habitat_weigh
         isinstance(habitat_weights, np.ndarray) and habitat_weights.ndim == 1
     )
 
-
 def sample_indices(prob_weights, total_samples):
-    """
-    Sample indices according to probability weights.
-    Equivalent to R's sample(..., prob=..., replace=TRUE).
-    """
     prob_weights = np.asarray(prob_weights)
     prob_weights /= prob_weights.sum()
     return np.random.choice(len(prob_weights), size=total_samples, p=prob_weights, replace=True)
+
+# ------------------------------------------------
+# 2. Main model function
+# ------------------------------------------------
 
 def clim_to_proxy_clim(
     clim_signal,
@@ -42,83 +57,53 @@ def clim_to_proxy_clim(
     n_samples=np.inf,
     n_replicates=1,
     top_of_core=None,
-    n_bd=3
+    n_bd=3,
+    stages_key = None,
+    return_full = False,
 ):
-    # -------------------------------
-    # Step 1: Input preparation
-    # -------------------------------
+    
+    # 2.1 Prep inputs
     timepoints = np.asarray(timepoints)
     n_timepoints = len(timepoints)
     if isinstance(clim_signal, pd.DataFrame):
         clim_signal = clim_signal.values
-
     if top_of_core is None:
         top_of_core = 0
-
+    
     min_clim_time = 0
     max_clim_time = clim_signal.shape[0] - 1
+
+    # Optional smoothing output (plot_sig_res equivalent)
+    if plot_sig_res is not None:
+        timepoints_smoothed = np.arange(min_clim_time, max_clim_time, plot_sig_res)
+        clim_signal_smoothed = chunk_matrix(timepoints_smoothed, plot_sig_res, clim_signal)
+    else:
+        timepoints_smoothed = None
+        clim_signal_smoothed = None
+
 
     if noise_type is None:
         noise_type = "multiplicative" if calibration_type == "MgCa" else "additive"
     if scale_noise is None:
         scale_noise = calibration_type != "identity"
     if calibration is None:
-        calibration = {
-            "MgCa": "Ten planktonic species_350-500",
-            "Uk37": "Mueller global",
-            "identity": None
-        }[calibration_type]
+        calibration = {"MgCa": "Ten planktonic species_350-500", "Uk37": "Mueller global", "identity": None}[calibration_type]
 
-    # -------------------------------
-    # Step 2: Calibration conversion
-    # -------------------------------
-    if calibration_type != "identity":
-        proxy_clim_signal = proxy_conversion(
-            temperature=clim_signal,
-            calibration_type=calibration_type,
-            calibration=calibration,
-            slp_int_means=slp_int_means,
-            slp_int_vcov=slp_int_vcov,
-            point_or_sample="point",
-            n=1
-        )
-    else:
-        proxy_clim_signal = clim_signal
+    # 2.2 Proxy conversion (assume identity)
+    proxy_clim_signal = clim_signal  # identity calibration (no conversion)
 
-    # -------------------------------
-    # Step 3: Optional smoothed signal
-    # -------------------------------
-    if plot_sig_res is not None:
-        timepoints_smoothed = np.arange(min_clim_time - 1, max_clim_time - 1, plot_sig_res)
-        clim_signal_smoothed = chunk_matrix(timepoints_smoothed, plot_sig_res, clim_signal)
-    else:
-        timepoints_smoothed = None
-        clim_signal_smoothed = None
-
-    # -------------------------------
-    # Step 4: Simulate proxy signal (Rapid or Slow, inlined)
-    # -------------------------------
+    # 2.3 Simulate proxy signal
     use_rapid = is_rapid_case(bio_depth, sed_acc_rate, layer_width, n_samples, habitat_weights)
 
-    proxy_bt = []
-    proxy_bt_sb = []
-    proxy_bt_sb_sampY = []
-    proxy_bt_sb_sampYM = []
-
+    proxy_bt, proxy_bt_sb, proxy_bt_sb_sampY, proxy_bt_sb_sampYM = [], [], [], []
+    
     for i, tp in enumerate(timepoints):
-        # Set bioturbation window
-        if use_rapid:
-            bio_ts = int(1000 * bio_depth / sed_acc_rate)
-            layer_yrs = int(np.ceil(1000 * layer_width / sed_acc_rate))
-        else:
-            bio_ts = int(1000 * bio_depth / sed_acc_rate[i])
-            layer_yrs = int(np.ceil(1000 * layer_width / sed_acc_rate[i]))
-
+        bio_ts = int(1000 * bio_depth / (sed_acc_rate if use_rapid else sed_acc_rate[i]))
+        layer_yrs = int(np.ceil(1000 * layer_width / (sed_acc_rate if use_rapid else sed_acc_rate[i])))
         first_tp = -bio_ts - layer_yrs // 2
         last_tp = n_bd * bio_ts
         bioturb_window = np.arange(first_tp, last_tp + 1)
 
-        # Get bioturbation weights
         weights = bioturbation_weights(
             z=bioturb_window,
             focal_z=0 if use_rapid else tp,
@@ -128,46 +113,64 @@ def clim_to_proxy_clim(
             scale="time"
         )
 
-        # Define seasonal weights
-        if use_rapid:
-            hab_wts = habitat_weights / habitat_weights.sum()
-            w_season = np.outer(weights, hab_wts)
-        else:
-            hab_wts = habitat_weights[i] / habitat_weights[i].sum()
-            w_season = weights[:, None] * hab_wts
-
+        hab_wts = habitat_weights / habitat_weights.sum() if use_rapid else habitat_weights[i] / habitat_weights[i].sum()
+        w_season = np.outer(weights, hab_wts)
         w_season /= w_season.sum()
-        proxy_window = proxy_clim_signal[(tp + bioturb_window).clip(min=0, max=proxy_clim_signal.shape[0] - 1)]
 
-        # Compute proxy signal
-        proxy_bt.append((np.outer(weights, np.ones(proxy_clim_signal.shape[1])) * proxy_window).sum())
+        proxy_window = proxy_clim_signal[(tp + bioturb_window).clip(min=0, max=proxy_clim_signal.shape[0]-1)]
+        # proxy_bt.append((np.outer(weights, np.ones(proxy_clim_signal.shape[1])) * proxy_window).sum())
+        # compute total bioturbation-weighted average across months
+        proxy_bt.append(((np.outer(weights, np.ones(proxy_clim_signal.shape[1])) * proxy_window).sum()) / proxy_clim_signal.shape[1])
+
+
         proxy_bt_sb.append((w_season * proxy_window).sum())
 
-        # Aliasing
+        # Replace this section in your code (around line 120-130):
+
+        # Replace the entire finite sampling section in your code (around lines 120-140):
+
         ns = n_samples if use_rapid else n_samples[i]
         if np.isinf(ns):
-            proxy_bt_sb_sampYM.append([np.nan] * n_replicates)
-            proxy_bt_sb_sampY.append([np.nan] * n_replicates)
+            proxy_bt_sb_sampYM.append(np.full((n_replicates,), np.nan))
+            proxy_bt_sb_sampY.append(np.full((n_replicates,), np.nan))
         else:
             ns = int(ns)
-            prob_weights = w_season.flatten()
-            samples = sample_indices(prob_weights, ns * n_replicates)
-            vals = proxy_window.reshape(-1, proxy_window.shape[-1])[samples]
-            vals = vals.reshape(n_replicates, ns, -1).mean(axis=1).mean(axis=1)
-            proxy_bt_sb_sampYM.append(vals)
-            proxy_bt_sb_sampY.append(vals)
 
-    # Convert to arrays
+            # FIXED SECTION - Replace your existing sampling code with this:
+            prob_weights = w_season.flatten()
+            prob_weights = prob_weights / prob_weights.sum()  # Ensure normalized
+            
+            # Sample indices from the correct range using np.random.choice
+            samples = np.random.choice(len(prob_weights), size=ns * n_replicates, 
+                                     p=prob_weights, replace=True)
+            
+            # Get the flattened proxy values and sample from them
+            proxy_flat = proxy_window.flatten()
+            sampled_vals = proxy_flat[samples]
+            
+            # Reshape to (n_replicates, ns) and take mean across samples (axis=1)
+            vals = sampled_vals.reshape(n_replicates, ns).mean(axis=1)
+            proxy_bt_sb_sampYM.append(vals)
+            
+            # For sampY (no seasonal aliasing), get annual means first
+            annual_means = (proxy_window * hab_wts[np.newaxis, :]).sum(axis=1)
+            row_indices = samples % proxy_window.shape[0]  # Get row indices
+            annual_sampled = annual_means[row_indices]
+            annual_vals = annual_sampled.reshape(n_replicates, ns).mean(axis=1)
+            proxy_bt_sb_sampY.append(annual_vals)
+
     proxy_bt = np.array(proxy_bt)
     proxy_bt_sb = np.array(proxy_bt_sb)
     proxy_bt_sb_sampYM = np.array(proxy_bt_sb_sampYM)
     proxy_bt_sb_sampY = np.array(proxy_bt_sb_sampY)
 
-    # -------------------------------
-    # Step 5: Add bias and noise
-    # -------------------------------
+    # 2.4 Noise rescaling (scale_noise block)
     sigma_ind_scaled = sigma_ind / np.sqrt(n_samples) if np.isfinite(n_samples) else 0
     sigma_meas_ind = np.sqrt(sigma_meas**2 + sigma_ind_scaled**2)
+
+    if scale_noise:
+        mean_temperature = proxy_bt  # identity case (no back conversion needed)
+        sigma_meas_ind = sigma_meas_ind  # identity still in correct units
 
     if noise_type == "additive":
         noise = np.random.normal(0, sigma_meas_ind, size=proxy_bt_sb_sampYM.shape)
@@ -180,72 +183,68 @@ def clim_to_proxy_clim(
         proxy_bt_sb_sampYM_b = proxy_bt_sb_sampYM * bias
         proxy_bt_sb_sampYM_b_n = proxy_bt_sb_sampYM_b * noise
 
-    # -------------------------------
-    # Step 6: Calibration error and back-conversion
-    # -------------------------------
-    if calibration_type != "identity":
-        recon_temp = proxy_conversion(
-            proxy_val=proxy_bt_sb_sampYM_b_n,
-            calibration_type=calibration_type,
-            calibration=calibration,
-            slp_int_means=slp_int_means,
-            slp_int_vcov=slp_int_vcov,
-            point_or_sample="point",
-            n=1
-        )
-        recon_proxy = proxy_conversion(
-            temperature=recon_temp,
-            calibration_type=calibration_type,
-            calibration=calibration,
-            slp_int_means=slp_int_means,
-            slp_int_vcov=slp_int_vcov,
-            point_or_sample="sample",
-            n=n_replicates
-        )
+    # Infinite sample bias+noise
+    if noise_type == "additive":
+        inf_noise = np.random.normal(0, sigma_meas_ind, size=(n_timepoints, n_replicates))
+        inf_bias = np.random.normal(0, meas_bias, size=(n_replicates,))
+        proxy_bt_sb_inf_b = proxy_bt_sb[:, np.newaxis] + inf_bias
+        proxy_bt_sb_inf_b_n = proxy_bt_sb_inf_b + inf_noise
     else:
-        recon_temp = proxy_bt_sb_sampYM_b_n
-        recon_proxy = proxy_bt_sb_sampYM_b_n
+        inf_noise = np.exp(np.random.normal(0, sigma_meas_ind, size=(n_timepoints, n_replicates)))
+        inf_bias = np.exp(np.random.normal(0, meas_bias, size=(n_replicates,)))
+        proxy_bt_sb_inf_b = proxy_bt_sb[:, np.newaxis] * inf_bias
+        proxy_bt_sb_inf_b_n = proxy_bt_sb_inf_b * inf_noise
 
-    # -------------------------------
-    # Step 7: Assemble outputs
-    # -------------------------------
-    simulated_proxy = proxy_bt_sb_sampYM_b_n if np.isfinite(n_samples) else proxy_bt_sb
+    # 2.5 Select output path depending on finite vs infinite sampling
+    simulated_proxy = proxy_bt_sb_sampYM_b_n if np.isfinite(n_samples) else proxy_bt_sb_inf_b_n
+    recon_temp = simulated_proxy
+    recon_proxy = simulated_proxy  # no calibration uncertainty under identity
 
+    # 2.6 Build PFM dictionary (fully shape-safe)
     PFM = {
-        "proxy.bt": proxy_bt,
-        "proxy.bt.sb": proxy_bt_sb,
-        "proxy.bt.sb.sampY": proxy_bt_sb_sampY,
-        "proxy.bt.sb.sampYM": proxy_bt_sb_sampYM,
-        "proxy.bt.sb.sampYM.b": proxy_bt_sb_sampYM_b,
-        "proxy.bt.sb.sampYM.b.n": proxy_bt_sb_sampYM_b_n,
-        "simulated.proxy": simulated_proxy,
-        "simulated.proxy.cal.err": recon_proxy,
-        "reconstructed.climate": recon_temp,
-        "timepoints": timepoints,
-        "n.samples": n_samples,
-        "clim.signal.ann": clim_signal[timepoints].mean(axis=1),
-        "clim.timepoints.ssr": chunk_matrix(timepoints, plot_sig_res, clim_signal)
-        if plot_sig_res is not None else None,
-        "timepoints.smoothed": timepoints_smoothed,
-        "clim.signal.smoothed": clim_signal_smoothed
+        "proxy_bt": np.squeeze(proxy_bt),
+        "proxy_bt_sb": np.squeeze(proxy_bt_sb),
+        "proxy_bt_sb_inf_b": np.squeeze(proxy_bt_sb_inf_b),
+        "proxy_bt_sb_inf_b_n": np.squeeze(proxy_bt_sb_inf_b_n),
+        "proxy_bt_sb_sampY": np.squeeze(proxy_bt_sb_sampY),
+        "proxy_bt_sb_sampYM": np.squeeze(proxy_bt_sb_sampYM),
+        "proxy_bt_sb_sampYM_b": np.squeeze(proxy_bt_sb_sampYM_b),
+        "proxy_bt_sb_sampYM_b_n": np.squeeze(proxy_bt_sb_sampYM_b_n),
+        "simulated_proxy": np.squeeze(simulated_proxy),
+        "simulated_proxy_cal_err": np.squeeze(recon_proxy),
+        "reconstructed_climate": np.squeeze(recon_temp),
+        "timepoints": np.squeeze(timepoints),
+        "n_samples": n_samples,
+        "clim_signal_ann": np.squeeze(clim_signal[timepoints].mean(axis=1)),
+        "clim_timepoints_ssr": None,  # Smoothed signal left out for now
+        "timepoints_smoothed": None,
+        "clim_signal_smoothed": None
     }
 
+    pfm_df = make_pfm_df(PFM, stages_key=stages_key)
+    
+    # Build the tidy long-form dataframe:
+    pfm_df = make_pfm_df(PFM, stages_key)
+
+    # Build the simulated.proxy tibble equivalent:
     sim_df = pd.DataFrame({
-        "timepoints": timepoints,
-        "simulated_proxy": simulated_proxy[:, 0] if simulated_proxy.ndim == 2 else simulated_proxy,
-        "reconstructed_climate": recon_temp[:, 0] if recon_temp.ndim == 2 else recon_temp
+    "timepoints": timepoints,
+    "simulated_proxy": simulated_proxy[:, 0] if simulated_proxy.ndim == 2 else simulated_proxy,
+    "reconstructed_climate": recon_temp[:, 0] if recon_temp.ndim == 2 else recon_temp
     })
 
-    everything_df = make_pfm_df(PFM)
+    # Build smoothed.signal equivalent:
+    smoothed_signal_df = pd.DataFrame({
+        "timepoints": timepoints_smoothed,
+        "value": clim_signal_smoothed,
+        "stage": "clim_signal_smoothed"
+    }) if clim_signal_smoothed is not None else None
 
+    # Return Everything 
     return {
+        "everything": pfm_df,
         "simulated_proxy": sim_df,
-        "smoothed_signal": pd.DataFrame({
-            "timepoints": timepoints_smoothed,
-            "value": clim_signal_smoothed,
-            "stage": "clim.signal.smoothed"
-        }) if clim_signal_smoothed is not None else None,
-        "everything": everything_df,
+        "smoothed_signal": smoothed_signal_df,
         "calibration_pars": {
             "calibration_type": calibration_type,
             "calibration": calibration,
@@ -253,6 +252,139 @@ def clim_to_proxy_clim(
         }
     }
 
+
+
+# ------------------------------------------------
+# 3. Fully safe dataframe constructor
+# ------------------------------------------------
+
+def make_pfm_df2(pfm, stages_key):
+    """
+    Build dataframe safely from PFM dictionary with full broadcasting.
+    """
+    stage_cols = [
+        "proxy_bt_sb_sampY",
+        "proxy_bt_sb_sampYM",
+        "proxy_bt_sb_inf_b",
+        "proxy_bt_sb_sampYM_b",
+        "proxy_bt_sb_inf_b_n",
+        "proxy_bt_sb_sampYM_b_n",
+        "simulated_proxy",
+        "simulated_proxy_cal_err",
+        "reconstructed_climate",
+        "proxy_bt",
+        "proxy_bt_sb",
+        "clim_signal_ann",
+        "clim_timepoints_ssr"
+    ]
+
+    # Build wide dataframe
+    df = pd.DataFrame({
+        col: np.squeeze(pfm[col]) for col in stage_cols
+    })
+
+    df['timepoints'] = np.squeeze(pfm['timepoints'])
+    df['n_samples'] = np.repeat(pfm['n_samples'], len(df['timepoints']))
+    df['replicate'] = 1
+
+    # Melt wide to long
+    df_long = df.melt(
+        id_vars=['timepoints', 'n_samples', 'replicate'],
+        value_vars=stage_cols,
+        var_name='stage',
+        value_name='value'
+    )
+
+    # Merge stages_key to bring in plotting info
+    full_df = df_long.merge(stages_key, on='stage', how='left')
+
+    return full_df
+
+def make_pfm_df(pfm, stages_key):
+    """
+    Build dataframe safely from PFM dictionary with full broadcasting.
+    Handles both 1D and 2D arrays properly for multiple replicates.
+    """
+    stage_cols = [
+        "proxy_bt_sb_sampY",
+        "proxy_bt_sb_sampYM", 
+        "proxy_bt_sb_inf_b",
+        "proxy_bt_sb_sampYM_b",
+        "proxy_bt_sb_inf_b_n",
+        "proxy_bt_sb_sampYM_b_n",
+        "simulated_proxy",
+        "simulated_proxy_cal_err",
+        "reconstructed_climate",
+        "proxy_bt",
+        "proxy_bt_sb",
+        "clim_signal_ann",
+        "clim_timepoints_ssr"
+    ]
+
+    # Get dimensions
+    timepoints = np.asarray(pfm['timepoints'])
+    n_timepoints = len(timepoints)
+    
+    # Determine number of replicates by checking a 2D array
+    sample_array = pfm.get('proxy_bt_sb_sampYM', pfm.get('simulated_proxy'))
+    if sample_array is not None and sample_array.ndim == 2:
+        n_replicates = sample_array.shape[1]
+    else:
+        n_replicates = 1
+
+    # Build list of records for each replicate
+    all_records = []
+    
+    for rep in range(n_replicates):
+        for i, tp in enumerate(timepoints):
+            record = {
+                'timepoints': tp,
+                'n_samples': pfm['n_samples'],
+                'replicate': rep + 1  # 1-indexed like R
+            }
+            
+            # Add stage values
+            for col in stage_cols:
+                if col in pfm and pfm[col] is not None:
+                    arr = np.asarray(pfm[col])
+                    if arr.ndim == 0:  # scalar
+                        record[col] = float(arr)
+                    elif arr.ndim == 1:  # 1D array
+                        if len(arr) > i:
+                            record[col] = arr[i]
+                        else:
+                            record[col] = np.nan
+                    elif arr.ndim == 2:  # 2D array (timepoints x replicates)
+                        if i < arr.shape[0] and rep < arr.shape[1]:
+                            record[col] = arr[i, rep]
+                        else:
+                            record[col] = np.nan
+                    else:
+                        record[col] = np.nan
+                else:
+                    record[col] = np.nan
+            
+            all_records.append(record)
+    
+    # Create DataFrame from records
+    df = pd.DataFrame(all_records)
+    
+    # Melt to long format
+    df_long = df.melt(
+        id_vars=['timepoints', 'n_samples', 'replicate'],
+        value_vars=stage_cols,
+        var_name='stage',
+        value_name='value'
+    )
+    
+    # Remove rows with NaN values
+    df_long = df_long.dropna(subset=['value'])
+    
+    # Merge with stages_key if provided
+    if stages_key is not None:
+        df_long = df_long.merge(stages_key, on='stage', how='left')
+    
+    return df_long
 
 def chunk_matrix(timepoints, width, climate_matrix, start_year=None):
     """
@@ -298,84 +430,3 @@ def chunk_matrix(timepoints, width, climate_matrix, start_year=None):
         results.append(np.nanmean(block))  # Drop NaNs just in case
 
     return np.array(results)
-
-
-def make_pfm_df(pfm, stages_key_df):
-    """
-    Convert PFM output into a long-form tidy DataFrame with stage metadata.
-
-    Parameters
-    ----------
-    pfm : dict
-        Dictionary containing all proxy stages from ClimToProxyClim.
-    stages_key_df : DataFrame
-        Metadata table with columns ['stage', 'scale', 'label']
-
-    Returns
-    -------
-    DataFrame
-        Long-form DataFrame of proxy simulation stages with metadata joined.
-    """
-    n_replicates = pfm['proxy_bt_sb_inf_b'].shape[1]
-    n_timepoints = len(pfm['timepoints'])
-
-    # --- Replicated proxy stages ---
-    stage_cols = [
-        "proxy_bt_sb_sampY",
-        "proxy_bt_sb_sampYM",
-        "proxy_bt_sb_inf_b",
-        "proxy_bt_sb_sampYM_b",
-        "proxy_bt_sb_inf_b_n",
-        "proxy_bt_sb_sampYM_b_n",
-        "simulated_proxy",
-        "simulated_proxy_cal_err",
-        "reconstructed_climate"
-    ]
-
-    df = pd.DataFrame({
-        col: pfm[col].flatten() for col in stage_cols
-    })
-
-    df['timepoints'] = np.tile(pfm['timepoints'], n_replicates)
-    df['n_samples'] = np.tile(pfm['n_samples'], n_replicates)
-    df['replicate'] = np.repeat(np.arange(1, n_replicates + 1), n_timepoints)
-
-    df = df.melt(
-        id_vars=['timepoints', 'n_samples', 'replicate'],
-        value_vars=stage_cols,
-        var_name='stage',
-        value_name='value'
-    ).dropna(subset=['value'])
-
-    # --- Single-replicate stages ---
-    df2 = pd.DataFrame({
-        'timepoints': pfm['timepoints'],
-        'n.samples': pfm['n.samples'],
-        'replicate': 1,
-        'proxy_bt': pfm['proxy_bt'],
-        'proxy_bt_sb': pfm['proxy_bt_sb'],
-        'clim_signal_ann': pfm['clim_signal_ann'],
-        'clim_timepoints_ssr': pfm['clim_timepoints_ssr']
-    })
-
-    df2 = df2.melt(
-        id_vars=['timepoints', 'n_samples', 'replicate'],
-        var_name='stage',
-        value_name='value'
-    ).dropna(subset=['value'])
-
-    # --- Smoothed signal ---
-    df_smoothed = pd.DataFrame({
-        'replicate': 1,
-        'timepoints': pfm['timepoints_smoothed'],
-        'stage': 'clim_signal_smoothed',
-        'value': pfm['clim_signal_smoothed']
-    })
-
-    # --- Combine all ---
-    full_df = pd.concat([df, df2, df_smoothed], ignore_index=True)
-
-    # --- Join with stages key (adds plotting scale, labels, etc.) ---
-    full_df = full_df.merge(stages_key_df, on='stage', how='left')
-
-    return full_df

@@ -1,0 +1,17 @@
+"stage","label","description","scale","plot.order","plotting.colour","plotting.alpha"
+"timepoints","Requested timepoints","Requested timepoints","time",1,"Black",1
+"clim_signal_ann","(1) Input climate","Input climate signal at requested timepoints at annual resolution","Climate units",1,"#018571",1
+"clim_signal_smoothed","(1) Input climate","Input climate signal at regular time intervals and resolution = plot.sig.res","Climate units",2,"#018571",1
+"clim_timepoints_ssr","(1) Input climate","Input climate signal at requested timepoints, smoothed to resolution = plot.sig.res","Climate units",3,"#018571",1
+"proxy_bt","(2) +Bioturbation","Climate signal after bioturbation","Proxy units",4,"Green",1
+"proxy_bt_sb","(3) +Habitat bias","Climate signal after bioturbation and habitat bias","Proxy units",5,"Gold",1
+"proxy_bt_sb_inf_b","(.) +Bias","Climate signal after bioturbation, habitat bias, and bias","Proxy units",10,"Pink",0.5
+"proxy_bt_sb_inf_b_n","(5) +Independent error","Climate signal after bioturbation, habitat bias, and measurement error","Proxy units",6,"#7570b3",0.5
+"proxy_bt_sb_sampY","(4) +Aliasing Y","Climate signal after bioturbation, habitat bias, and aliasing of inter-annual variation","Proxy units",7,"#d95f02",0.5
+"proxy_bt_sb_sampYM","(4) +Aliasing YM","Climate signal after bioturbation, habitat bias, and aliasing of inter-annual and intra-annual variation such as monthly temperatures or depth habitats","Proxy units",8,"#d95f02",1
+"proxy_bt_sb_sampYM_b","(.) +Bias","Climate signal after bioturbation, habitat bias, and aliasing of inter-annual and intra-annual variation such as monthly temperatures or depth habitats, and bias","Proxy units",9,"Pink",0.5
+"proxy_bt_sb_sampYM_b_n","(5) +Independent error","Climate signal after bioturbation, habitat bias, aliasing, and measurement error","Proxy units",11,"#7570b3",0.5
+"simulated_proxy","(5) +Independent error","Final simulated pseudo-proxy, this will be same as proxy.bt.sb.inf.b.n when n.samples = Inf, and proxy.bt.sb.sampYM.b.n when n.samples is finite","Proxy units",12,"#7570b3",1
+"simulated_proxy_cal_err","(6) +Calibration uncertainty","Final simulated pseudo-proxy + uncertainty in true relationship to the climate variable (calibration error)","Proxy units",13,"Red",1
+"reconstructed_climate","(7) Reconstructed climate","Final pseudo-proxy calibrated to temperature","Climate units",14,"Blue",0.5
+"observed_proxy","(*) Observed proxy","True observed proxy (when supplied)",NA,15,"Red",0.5
