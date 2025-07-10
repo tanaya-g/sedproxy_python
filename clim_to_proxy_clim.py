@@ -11,7 +11,7 @@ stages_key_path = os.path.join(module_dir, "data", "stages_key.csv")
 stages_key_df = pd.read_csv(stages_key_path)
 
 import warnings
-from bioturbation_weights import bioturbation_weights
+from bioturbation_weights_old import bioturbation_weights
 from proxy_conversion import proxy_conversion
 
 # ------------------------------------------------
@@ -97,23 +97,30 @@ def clim_to_proxy_clim(
 
     proxy_bt, proxy_bt_sb, proxy_bt_sb_sampY, proxy_bt_sb_sampYM = [], [], [], []
     
+    # CHANGED 
     for i, tp in enumerate(timepoints):
         bio_ts = int(1000 * bio_depth / (sed_acc_rate if use_rapid else sed_acc_rate[i]))
-        layer_yrs = int(np.ceil(1000 * layer_width / (sed_acc_rate if use_rapid else sed_acc_rate[i])))
+        current_sed_acc = sed_acc_rate if use_rapid else sed_acc_rate[i]
+        layer_yrs = int(np.ceil(1000 * layer_width / current_sed_acc))
+        #layer_yrs = int(np.ceil(1000 * layer_width / (sed_acc_rate if use_rapid else sed_acc_rate[i])))
         first_tp = -bio_ts - layer_yrs // 2
         last_tp = n_bd * bio_ts
         bioturb_window = np.arange(first_tp, last_tp + 1)
 
+        # CHANGED
+
         weights = bioturbation_weights(
             z=bioturb_window,
             focal_z=0 if use_rapid else tp,
-            layer_width=layer_width if use_rapid else layer_width[i],
+            layer_width=layer_width,
+            #layer_width=layer_width if use_rapid else layer_width[i],
             sed_acc_rate=sed_acc_rate if use_rapid else sed_acc_rate[i],
             bio_depth=bio_depth,
             scale="time"
         )
 
-        hab_wts = habitat_weights / habitat_weights.sum() if use_rapid else habitat_weights[i] / habitat_weights[i].sum()
+        #hab_wts = habitat_weights / habitat_weights.sum() if use_rapid else habitat_weights[i] / habitat_weights[i].sum()
+        hab_wts = habitat_weights / habitat_weights.sum()
         w_season = np.outer(weights, hab_wts)
         w_season /= w_season.sum()
 
@@ -128,8 +135,9 @@ def clim_to_proxy_clim(
         # Replace this section in your code (around line 120-130):
 
         # Replace the entire finite sampling section in your code (around lines 120-140):
-
-        ns = n_samples if use_rapid else n_samples[i]
+        
+        ns = n_samples
+        #ns = n_samples if use_rapid else n_samples[i]
         if np.isinf(ns):
             proxy_bt_sb_sampYM.append(np.full((n_replicates,), np.nan))
             proxy_bt_sb_sampY.append(np.full((n_replicates,), np.nan))

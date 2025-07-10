@@ -13,7 +13,7 @@ stages_key_df = pd.read_csv(stages_key_path)
 import warnings
 import numpy as np
 import pandas as pd
-from .bioturbation_weights import bioturbation_weights
+from .bioturbation_weights_old import bioturbation_weights
 from .proxy_conversion import proxy_conversion
 
 def is_rapid_case(bio_depth, sed_acc_rate, layer_width, n_samples, habitat_weights):

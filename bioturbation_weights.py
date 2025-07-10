@@ -1,28 +1,11 @@
 import numpy as np
+from scipy import stats
 
 def bioturbation_weights(z, focal_z, layer_width=1, sed_acc_rate=1, bio_depth=10, scale='time'):
     """
     Compute bioturbation weights for a focal depth or time.
-
-    Parameters
-    ----------
-    z : array-like
-        Vector of depths or times to evaluate weights at.
-    focal_z : float
-        Central depth or time for the sample.
-    layer_width : float, optional
-        Thickness of the sampled sediment layer.
-    sed_acc_rate : float
-        Sediment accumulation rate (same units as z/focal_z).
-    bio_depth : float
-        Depth of the bioturbation layer.
-    scale : str
-        Either "time" or "depth". If "depth", converts z to time using sed_acc_rate.
-
-    Returns
-    -------
-    np.ndarray
-        Array of bioturbation weights, normalized to sum to 1.
+    
+    This is a direct Python translation of the R BioturbationWeights function.
     """
     sed_acc_rate = sed_acc_rate / 1000  # Convert from mm/ka → mm/a (or cm/ka → cm/a)
 
@@ -44,37 +27,42 @@ def bioturbation_weights(z, focal_z, layer_width=1, sed_acc_rate=1, bio_depth=10
     C = lwy / 2
     lam = 1 / mdy if mdy != 0 else np.inf
 
+    # Shift z coordinates (this matches R exactly)
     z_shifted = z - focal_z + mdy
 
-    # Compute fz based on R logic
-
-    #shallow depth
+    # Compute fz using R logic exactly
     if mdy <= 1 and lwy > 0:
+        # Use uniform distribution like R's dunif
         fz = np.where(
             (z_shifted >= -C) & (z_shifted <= C),
-            1 / (2 * C),
+            1 / (2 * C),  # This is equivalent to stats.uniform.pdf(z_shifted, -C, 2*C)
             0
         )
-    #no sample thickness
     elif lwy == 0:
-        fz = lam * np.exp(-lam * z_shifted)
-        fz[z_shifted < 0] = 0
-    # general case
+        # Use exponential distribution like R's dexp
+        # Note: R's dexp(x, rate) = rate * exp(-rate * x) for x >= 0
+        fz = np.where(z_shifted >= 0, lam * np.exp(-lam * z_shifted), 0)
     else:
+        # General case - match R formula exactly
         fz = np.zeros_like(z_shifted)
+        
+        # Case 1: z < -C
+        mask1 = z_shifted < -C
+        fz[mask1] = 0
+        
+        # Case 2: -C <= z <= C  
+        mask2 = (z_shifted >= -C) & (z_shifted <= C)
+        if np.any(mask2):
+            fz[mask2] = (lam * (1/lam - np.exp(-lam*C - lam*z_shifted[mask2])/lam)) / (2*C)
+        
+        # Case 3: z > C
+        mask3 = z_shifted > C
+        if np.any(mask3):
+            fz[mask3] = (lam * (np.exp(lam*C - lam*z_shifted[mask3])/lam - np.exp(-lam*C - lam*z_shifted[mask3])/lam)) / (2*C)
 
-        in_center = (z_shifted >= -C) & (z_shifted <= C)
-        fz[in_center] = (
-            lam * (1 - np.exp(-lam * (C + z_shifted[in_center]))) / (2 * C)
-        )
-
-        right_tail = z_shifted > C
-        fz[right_tail] = (
-            lam * (np.exp(lam * (C - z_shifted[right_tail])) - np.exp(-lam * (C + z_shifted[right_tail]))) / (2 * C)
-        )
-
-    # Normalize to sum to 1 if nonzero
-    if fz.sum() > 0:
-        fz /= np.sum(fz)
-
-    return fz
+    # Normalize exactly like R
+    if np.sum(fz) == 0:
+        return fz
+    else:
+        fz = fz / np.sum(fz)
+        return fz
