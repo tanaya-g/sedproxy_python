@@ -1,3 +1,5 @@
+import numpy as np
+
 def foram_growth_ft(temperature_K, foram="ruber", norm=False, min_growth_thresh=0):
     """
     Compute growth rate of planktonic foraminifera as a function of temperature (in Kelvin).
